@@ -39,6 +39,22 @@ const userLocation = {
 };
 
 
+// Middleware to verify JWT token
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (token == null) return res.sendStatus(401);
+
+  jwt.verify(token, SECRET_KEY, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
+
+
 
 // Utility function to promisify db.get
 const dbGetAsync = (query, params) => {
@@ -60,35 +76,69 @@ const dbRunAsync = (query, params) => {
   });
 };
 
+// Endpoint to send a message using sender_id and recipient_id
+app.post('/api/send-message-by-id', authenticateToken, async (req, res) => {
+  const { recipient_id, content } = req.body;
+  console.log(req.body)
 
 
-// // Endpoint to handle sending a message
-// app.post('/api/send-message', authenticateToken, async (req, res) => {
-//   const { recipient_id, content } = req.body;
-//   const sender_phone = req.user.phone;
+  phone_number = req.user.phone;
+  const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [phone_number]);
+  if (!sender) {
+    return res.status(400).json({ error: 'Invalid sender' });
+  }
+  const sender_id = sender.user_id;
+  // get id from phone number
 
-//   try {
-//     // Get sender user ID
-//     const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [sender_phone]);
+  try {
+    // Insert the message
+    const query = `
+      INSERT INTO messages (sender_id, recipient_id, content, sent_at)
+      VALUES (?, ?, ?, datetime('now'))
+    `;
+    await dbRunAsync(query, [sender_id, recipient_id, content]);
 
-//     if (!sender) {
-//       return res.status(400).json({ error: 'Invalid sender' });
-//     }
+    res.json({ message: 'Message sent successfully' });
+  } catch (err) {
+    console.error('Error sending message:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
-//     // Insert the message
-//     const query = `
-//       INSERT INTO messages (sender_id, recipient_id, content, sent_at)
-//       VALUES (?, ?, ?, datetime('now'))
-//     `;
-//     await dbRunAsync(query, [sender.user_id, recipient_id, content]);
 
-//     res.json({ message: 'Message sent successfully' });
-//   } catch (err) {
-//     console.error('Error sending message:', err);
-//     res.status(500).json({ error: 'Internal server error' });
-//   }
-// });
 
+
+// Endpoint to get the last message from every user for the authenticated user
+app.get('/api/last-messages', authenticateToken, async (req, res) => {
+  const phone_no = req.user.phone;
+  try {
+    const user = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [phone_no]);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const query = `
+      SELECT m.recipient_id AS id, u.name, m.content AS lastMessage, MAX(m.sent_at) AS sentAt
+      FROM messages m
+      JOIN users u ON m.recipient_id = u.user_id
+      WHERE m.sender_id = ?
+      GROUP BY m.recipient_id
+      ORDER BY sentAt DESC
+    `;
+    const lastMessages = await new Promise((resolve, reject) => {
+      db.all(query, [user.user_id], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+
+    res.json(lastMessages);
+    console.log(lastMessages);
+  } catch (err) {
+    console.error('Error retrieving last messages:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // Endpoint to send OTP
 app.post('/api/send-otp', (req, res) => {
@@ -138,19 +188,6 @@ app.post('/api/verify-otp', (req, res) => {
   }
 });
 
-// Middleware to verify JWT token
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (token == null) return res.sendStatus(401);
-
-  jwt.verify(token, SECRET_KEY, (err, user) => {
-    if (err) return res.sendStatus(403);
-    req.user = user;
-    next();
-  });
-};
 
 // Endpoint for token refresh
 app.post('/api/refresh-token', (req, res) => {
