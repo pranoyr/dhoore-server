@@ -38,6 +38,58 @@ const userLocation = {
   longitude: 0
 };
 
+
+
+// Utility function to promisify db.get
+const dbGetAsync = (query, params) => {
+  return new Promise((resolve, reject) => {
+    db.get(query, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+};
+
+// Utility function to promisify db.run
+const dbRunAsync = (query, params) => {
+  return new Promise((resolve, reject) => {
+    db.run(query, params, function (err) {
+      if (err) reject(err);
+      else resolve(this);
+    });
+  });
+};
+
+
+
+// // Endpoint to handle sending a message
+// app.post('/api/send-message', authenticateToken, async (req, res) => {
+//   const { recipient_id, content } = req.body;
+//   const sender_phone = req.user.phone;
+
+//   try {
+//     // Get sender user ID
+//     const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [sender_phone]);
+
+//     if (!sender) {
+//       return res.status(400).json({ error: 'Invalid sender' });
+//     }
+
+//     // Insert the message
+//     const query = `
+//       INSERT INTO messages (sender_id, recipient_id, content, sent_at)
+//       VALUES (?, ?, ?, datetime('now'))
+//     `;
+//     await dbRunAsync(query, [sender.user_id, recipient_id, content]);
+
+//     res.json({ message: 'Message sent successfully' });
+//   } catch (err) {
+//     console.error('Error sending message:', err);
+//     res.status(500).json({ error: 'Internal server error' });
+//   }
+// });
+
+
 // Endpoint to send OTP
 app.post('/api/send-otp', (req, res) => {
   const { phone } = req.body;
@@ -120,6 +172,60 @@ app.post('/api/refresh-token', (req, res) => {
 
 
 
+app.get('/api/stop-journey/' , authenticateToken, (req, res) => 
+  {
+    const phone_no = req.user.phone;
+    const { status } = req.query;
+
+    const destination = null;
+
+    // update the status of the user to running and set the destination
+    const query = `
+      UPDATE running_vehicles
+      SET status = ?, destination = ?
+      WHERE user_id = (SELECT user_id FROM users WHERE phone_number = ?)`
+
+  db.run(query, [status, destination, phone_no], function(err) {
+    if (err) {
+      console.error('Error updating user location:', err);
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
+
+    res.json({ message: 'Journey stopped' });
+   });
+
+  });
+  
+
+
+
+
+app.get('/api/start-journey/' , authenticateToken, (req, res) => {
+  {
+    const phone_no = req.user.phone;
+    const { status, destination } = req.query;
+
+
+    // update the status of the user to running and set the destination
+    const query = `
+      UPDATE running_vehicles
+      SET status = ?, destination = ?
+      WHERE user_id = (SELECT user_id FROM users WHERE phone_number = ?)`
+   
+
+  db.run(query, [status, destination, phone_no], function(err) {
+    if (err) {
+      console.error('Error updating user location:', err);
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
+
+    res.json({ message: 'Journey started' });
+   });
+  }});
+
+
 
 // Define a route to fetch vehicles filtered by start and end locations
 app.get('/api/vehicles', authenticateToken, (req, res) => {
@@ -134,17 +240,20 @@ app.get('/api/vehicles', authenticateToken, (req, res) => {
     return res.status(400).json({ error: 'Start and end locations are required' });
   }
 
+
+  //   excpet the phone number user
   const query = `
     SELECT rv.*, u.*, v.*
     FROM running_vehicles AS rv
     JOIN users AS u ON rv.user_id = u.user_id
     JOIN vehicles AS v ON rv.vehicle_id = v.vehicle_id
-    WHERE rv.destination = ?
+    WHERE rv.destination = ? and u.phone_number != ?
+
 
   `;
   
 
-  db.all(query, [end], (err, rows) => {
+  db.all(query, [end, req.user.phone], (err, rows) => {
     if (err) {
       console.error('Error querying vehicles table:', err);
       res.status(500).json({ error: 'Internal server error' });
@@ -218,200 +327,372 @@ app.get('/api/userloc', authenticateToken, (req, res) => {
 
 
 
-app.get('/api/user-details', authenticateToken, (req, res) => {
+app.post('/api/save-details', authenticateToken, async (req, res) => {
+  try {
+    console.log("updating");
+
+    const { userName, userLatitude, userLongitude, userGender, vehicleModel, vehicleNumber, vehicleType } = req.body;
+    const phone_no = req.user.phone;
+    const verified = "yes";
+
+    // Check if the user with this phone number already exists
+    const checkUserQuery = `SELECT * FROM users WHERE phone_number = ?`;
+    const user = await dbGetAsync(checkUserQuery, [phone_no]);
+
+    if (user) {
+      // Update the user record
+      const updateUserQuery = `
+        UPDATE users
+        SET name = ?, verified = ?, curr_lat = ?, curr_long = ?, gender = ?
+        WHERE phone_number = ?
+      `;
+      await dbRunAsync(updateUserQuery, [userName, verified, userLatitude, userLongitude, userGender, phone_no]);
+      console.log('User details updated successfully');
+    } else {
+      // Insert a new user record
+      const insertUserQuery = `
+        INSERT INTO users (name, verified, curr_lat, curr_long, gender, phone_number)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `;
+      await dbRunAsync(insertUserQuery, [userName, verified, userLatitude, userLongitude, userGender, phone_no]);
+      console.log('User details saved successfully');
+    }
+
+    // Check if the license plate is already linked to another user
+    const checkLicensePlateQuery = `
+      SELECT u.phone_number
+      FROM vehicles v
+      JOIN running_vehicles rv ON v.vehicle_id = rv.vehicle_id
+      JOIN users u ON rv.user_id = u.user_id
+      WHERE v.licensePlate = ? AND u.phone_number != ?
+    `;
+    const licensePlateOwner = await dbGetAsync(checkLicensePlateQuery, [vehicleNumber, phone_no]);
+
+    if (licensePlateOwner) {
+      return res.status(400).json({ error: 'This license plate is already linked with another user.' });
+    }
+
+    // Now handle vehicle details
+    const checkVehicleQuery = `SELECT * FROM vehicles WHERE licensePlate = ?`;
+    const vehicle = await dbGetAsync(checkVehicleQuery, [vehicleNumber]);
+
+    let vehicle_id;
+    if (vehicle) {
+      // Update the vehicle record
+      const updateVehicleQuery = `
+        UPDATE vehicles
+        SET model = ?, vehicleType = ?
+        WHERE licensePlate = ?
+      `;
+      await dbRunAsync(updateVehicleQuery, [vehicleModel, vehicleType, vehicleNumber]);
+      console.log('Vehicle details updated successfully');
+      vehicle_id = vehicle.vehicle_id;
+    } else {
+      // Insert a new vehicle record
+      const insertVehicleQuery = `
+        INSERT INTO vehicles (model, licensePlate, vehicleType)
+        VALUES (?, ?, ?)
+      `;
+      await dbRunAsync(insertVehicleQuery, [vehicleModel, vehicleNumber, vehicleType]);
+      console.log('Vehicle details saved successfully');
+
+      // Get the new vehicle_id
+      const newVehicleIdQuery = `SELECT vehicle_id FROM vehicles WHERE licensePlate = ?`;
+      const newVehicle = await dbGetAsync(newVehicleIdQuery, [vehicleNumber]);
+      vehicle_id = newVehicle.vehicle_id;
+
+
+      // delte the old vehicle id  from the vehicle by searching with user in the running vehicle
+      const deleteVehicleQuery = `
+        DELETE FROM vehicles 
+        WHERE vehicle_id = (SELECT vehicle_id FROM running_vehicles WHERE user_id = (SELECT user_id FROM users WHERE phone_number = ?))
+      `;
+      await dbRunAsync(deleteVehicleQuery, [phone_no]);
+      console.log('Vehicle details deleted successfully');
+      
+    }
+
+    // Get user_id
+    const curr_user_id = `SELECT user_id FROM users WHERE phone_number = ?`;
+    const currentUser = await dbGetAsync(curr_user_id, [phone_no]);
+    const user_id = currentUser.user_id;
+
+    // Check if the user already has a running vehicle
+    const checkRunningVehicleQuery = `SELECT * FROM running_vehicles WHERE user_id = ?`;
+    const runningVehicle = await dbGetAsync(checkRunningVehicleQuery, [user_id]);
+
+    if (runningVehicle) {
+      // If exists, update the record
+      const updateRunningVehicleQuery = `
+        UPDATE running_vehicles
+        SET vehicle_id = ?, destination = NULL, status = NULL
+        WHERE user_id = ?
+      `;
+      await dbRunAsync(updateRunningVehicleQuery, [vehicle_id, user_id]);
+      console.log('Running vehicle details updated successfully');
+    } else {
+      // If not exists, insert a new record
+      const insertRunningVehicleQuery = `
+        INSERT INTO running_vehicles (user_id, vehicle_id, destination, status)
+        VALUES (?, ?, NULL, NULL)
+      `;
+      await dbRunAsync(insertRunningVehicleQuery, [user_id, vehicle_id]);
+      console.log('Running vehicle details saved successfully');
+    }
+
+    res.json({ message: 'Details saved successfully' });
+
+  } catch (err) {
+    console.error('Error handling request:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+app.get('/api/user-details', authenticateToken, async (req, res) => {
   const phone_no = req.user.phone;
 
   const query = `
     SELECT * FROM users WHERE phone_number = ?
   `;
 
-  db.get(query, [phone_no], (err, row) => {
-    if (err) {
-      console.error('Error querying user:', err);
-      res.status(500).json({ error: 'Internal server error' });
-      return;
+  try {
+    const user = await dbGetAsync(query, [phone_no]);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
     }
 
-    if (!row) {
-      res.status(404).json({ error: 'User not found' });
-      return;
-    }
+    res.json(user);
+  } catch (err) {
+    console.error('Error querying user:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
-    res.json(row);
-  });
-})
 
-app.post('/api/save-details', authenticateToken, (req, res) => {
-  console.log("updating");
+// /api/vehicle-details
+app.get('/api/vehicle-details', authenticateToken, async (req, res) => {
 
-  const { userName, userLatitude, userLongitude, userGender, vehicleModel, vehicleNumber, vehicleType } = req.body;
   const phone_no = req.user.phone;
-  const verified = "yes";
 
-  // First, check if the user with this phone number already exists
-  const checkUserQuery = `SELECT * FROM users WHERE phone_number = ?`;
+  const query = `
+    SELECT v.*
+    FROM vehicles v
+    JOIN running_vehicles rv ON v.vehicle_id = rv.vehicle_id
+    JOIN users u ON rv.user_id = u.user_id
+    WHERE u.phone_number = ?
+  `;
 
-  db.get(checkUserQuery, [phone_no], (err, row) => {
-    if (err) {
-      console.error('Error querying user:', err);
-      return res.status(500).json({ error: 'Internal server error' });
+  try {
+    const vehicle = await dbGetAsync(query, [phone_no]);
+
+    if (!vehicle) {
+      return res.status(404).json({ error: 'Vehicle not found' });
     }
 
-    if (row) {
-      // If the user exists, update the user record
-      const updateUserQuery = `
-        UPDATE users
-        SET name = ?, verified = ?, curr_lat = ?, curr_long = ?, gender = ?
-        WHERE phone_number = ?
-      `;
-      db.run(updateUserQuery, [userName, verified, userLatitude, userLongitude, userGender, phone_no], function (err) {
-        if (err) {
-          console.error('Error updating user:', err);
-          return res.status(500).json({ error: 'Internal server error' });
-        }
-        console.log('User details updated successfully');
-      });
-    } else {
-      // If the user does not exist, insert a new record
-      const insertUserQuery = `
-        INSERT INTO users (name, verified, curr_lat, curr_long, gender, phone_number)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `;
-      db.run(insertUserQuery, [userName, verified, userLatitude, userLongitude, userGender, phone_no], function (err) {
-        if (err) {
-          console.error('Error inserting new user:', err);
-          return res.status(500).json({ error: 'Internal server error' });
-        }
-        console.log('User details saved successfully');
-      });
+    res.json(vehicle);
+  } catch (err) {
+    console.error('Error querying vehicle:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
+app.post('/api/update-user-details', authenticateToken, async (req, res) => {
+  const phone_no = req.user.phone;
+  const { name, gender, curr_lat, curr_long } = req.body;
+
+  const query = `
+    UPDATE users
+    SET name = ?, gender = ?, curr_lat = ?, curr_long = ?
+    WHERE phone_number = ?
+  `;
+
+  try {
+    await dbRunAsync(query, [name, gender, curr_lat, curr_long, phone_no]);
+    res.json({ message: 'User details updated successfully' });
+  } catch (err) {
+    console.error('Error updating user details:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
+// body: {
+//   vehicle_id: 29,
+//   notused: null,
+//   model: 'KTM adv 3900',
+//   licensePlate: 'KL-01-DB-5628',
+//   vehicleType: 'Bike'
+// },
+
+
+
+app.post('/api/update-vehicle-details', authenticateToken, async (req, res) => {
+
+
+
+    const { _ , notused,  model, licensePlate, vehicleType} = req.body;
+
+
+
+    phone_no = req.user.phone;
+
+    // Check if the license plate is already linked to another user
+    const checkLicensePlateQuery = `
+    SELECT u.phone_number
+    FROM vehicles v
+    JOIN running_vehicles rv ON v.vehicle_id = rv.vehicle_id
+    JOIN users u ON rv.user_id = u.user_id
+    WHERE v.licensePlate = ? AND u.phone_number != ?
+    `;
+    const licensePlateOwner = await dbGetAsync(checkLicensePlateQuery, [licensePlate, phone_no]);
+
+    if (licensePlateOwner) {
+    return res.status(400).json({ error: 'This license plate is already linked with another user.' });
     }
+
 
     // Now handle vehicle details
     const checkVehicleQuery = `SELECT * FROM vehicles WHERE licensePlate = ?`;
+    const vehicle = await dbGetAsync(checkVehicleQuery, [licensePlate]);
 
-    db.get(checkVehicleQuery, [vehicleNumber], (err, vehicle) => {
-      if (err) {
-        console.error('Error querying vehicle:', err);
-        return res.status(500).json({ error: 'Internal server error' });
-      }
+    let vehicle_id;
+    if (vehicle) {
+    // Update the vehicle record
+    const updateVehicleQuery = `
+      UPDATE vehicles
+      SET model = ?, vehicleType = ?
+      WHERE licensePlate = ?
+    `;
+    await dbRunAsync(updateVehicleQuery, [model, vehicleType, licensePlate]);
+    console.log('Vehicle details updated successfully');
+    vehicle_id = vehicle.vehicle_id;
+    } else {
+    // Insert a new vehicle record
+    const insertVehicleQuery = `
+      INSERT INTO vehicles (model, licensePlate, vehicleType)
+      VALUES (?, ?, ?)
+    `;
+    await dbRunAsync(insertVehicleQuery, [model, licensePlate, vehicleType]);
+    console.log('Vehicle details saved successfully');
 
-      if (vehicle) {
-        // If the vehicle exists, update the record
-        const updateVehicleQuery = `
-          UPDATE vehicles
-          SET model = ?, vehicleType = ?
-          WHERE licensePlate = ?
-        `;
-        db.run(updateVehicleQuery, [vehicleModel, vehicleType, vehicleNumber], function (err) {
-          if (err) {
-            console.error('Error updating vehicle:', err);
-            return res.status(500).json({ error: 'Internal server error' });
-          }
-          console.log('Vehicle details updated successfully');
-          res.json({ message: 'Vehicle details updated successfully' });
-        });
-      } else {
-        const curr_user_id = `SELECT user_id FROM users WHERE phone_number = ?`;
+    // Get the new vehicle_id
+    const newVehicleIdQuery = `SELECT vehicle_id FROM vehicles WHERE licensePlate = ?`;
+    const newVehicle = await dbGetAsync(newVehicleIdQuery, [licensePlate]);
+    vehicle_id = newVehicle.vehicle_id;
 
-        db.get(curr_user_id, [phone_no], (err, row) => {
-          if (err) {
-            console.error('Error querying user:', err);
-            return res.status(500).json({ error: 'Internal server error' });
-          }
 
-          const user_id = row.user_id;
+    // delte the old vehicle id  from the vehicle by searching with user in the running vehicle
+    const deleteVehicleQuery = `
+      DELETE FROM vehicles 
+      WHERE vehicle_id = (SELECT vehicle_id FROM running_vehicles WHERE user_id = (SELECT user_id FROM users WHERE phone_number = ?))
+    `;
+    await dbRunAsync(deleteVehicleQuery, [phone_no]);
+    console.log('Vehicle details deleted successfully');
+    
+    }
 
-          const veh_id_to_delete = `SELECT vehicle_id FROM running_vehicles WHERE user_id = ?`;
+    // Get user_id
+    const curr_user_id = `SELECT user_id FROM users WHERE phone_number = ?`;
+    const currentUser = await dbGetAsync(curr_user_id, [phone_no]);
+    const user_id = currentUser.user_id;
 
-          db.get(veh_id_to_delete, [user_id], (err, row) => {
-            if (err) {
-              console.error('Error querying vehicle:', err);
-              return res.status(500).json({ error: 'Internal server error' });
-            }
+    // Check if the user already has a running vehicle
+    const checkRunningVehicleQuery = `SELECT * FROM running_vehicles WHERE user_id = ?`;
+    const runningVehicle = await dbGetAsync(checkRunningVehicleQuery, [user_id]);
 
-            if (row) {
-              const vehicle_id = row.vehicle_id;
-              const deleteVehicleQuery = `
-                DELETE FROM vehicles WHERE vehicle_id = ?
-              `;
-              db.run(deleteVehicleQuery, [vehicle_id], function (err) {
-                if (err) {
-                  console.error('Error deleting vehicle:', err);
-                  return res.status(500).json({ error: 'Internal server error' });
-                }
-                console.log('Vehicle details deleted successfully');
-              });
-            }
+    if (runningVehicle) {
+    // If exists, update the record
+    const updateRunningVehicleQuery = `
+      UPDATE running_vehicles
+      SET vehicle_id = ?, destination = NULL, status = NULL
+      WHERE user_id = ?
+    `;
+    await dbRunAsync(updateRunningVehicleQuery, [vehicle_id, user_id]);
+    console.log('Running vehicle details updated successfully');
+    } else {
+    // If not exists, insert a new record
+    const insertRunningVehicleQuery = `
+      INSERT INTO running_vehicles (user_id, vehicle_id, destination, status)
+      VALUES (?, ?, NULL, NULL)
+    `;
+    await dbRunAsync(insertRunningVehicleQuery, [user_id, vehicle_id]);
+    console.log('Running vehicle details saved successfully');
+    }
 
-            // Insert new vehicle record
-            const insertVehicleQuery = `
-              INSERT INTO vehicles (model, licensePlate, vehicleType)
-              VALUES (?, ?, ?)
-            `;
-            db.run(insertVehicleQuery, [vehicleModel, vehicleNumber, vehicleType], function (err) {
-              if (err) {
-                console.error('Error inserting new vehicle:', err);
-                return res.status(500).json({ error: 'Internal server error' });
-              }
-              console.log('Vehicle details saved successfully');
+    res.json({ message: 'Details saved successfully' });
 
-              // Get the new vehicle_id
-              const newVehicleIdQuery = `SELECT vehicle_id FROM vehicles WHERE licensePlate = ?`;
-              db.get(newVehicleIdQuery, [vehicleNumber], (err, vehicle) => {
-                if (err) {
-                  console.error('Error querying new vehicle id:', err);
-                  return res.status(500).json({ error: 'Internal server error' });
-                }
+});
 
-                const vehicle_id = vehicle.vehicle_id;
 
-                // Check if user already exists in running_vehicles
-                const checkRunningVehicleQuery = `SELECT * FROM running_vehicles WHERE user_id = ?`;
 
-                db.get(checkRunningVehicleQuery, [user_id], (err, runningVehicle) => {
-                  if (err) {
-                    console.error('Error querying running vehicle:', err);
-                    return res.status(500).json({ error: 'Internal server error' });
-                  }
 
-                  if (runningVehicle) {
-                    // If exists, update the record
-                    const updateRunningVehicleQuery = `
-                      UPDATE running_vehicles
-                      SET vehicle_id = ?, destination = NULL, status = NULL
-                      WHERE user_id = ?
-                    `;
-                    db.run(updateRunningVehicleQuery, [vehicle_id, user_id], function (err) {
-                      if (err) {
-                        console.error('Error updating running vehicle:', err);
-                        return res.status(500).json({ error: 'Internal server error' });
-                      }
-                      console.log('Running vehicle details updated successfully');
-                      res.json({ message: 'Vehicle details saved successfully' });
-                    });
-                  } else {
-                    // If not exists, insert a new record
-                    const insertRunningVehicleQuery = `
-                      INSERT INTO running_vehicles (user_id, vehicle_id, destination, status)
-                      VALUES (?, ?, NULL, NULL)
-                    `;
-                    db.run(insertRunningVehicleQuery, [user_id, vehicle_id], function (err) {
-                      if (err) {
-                        console.error('Error inserting running vehicle:', err);
-                        return res.status(500).json({ error: 'Internal server error' });
-                      }
-                      console.log('Running vehicle details saved successfully');
-                      res.json({ message: 'Vehicle details saved successfully' });
-                    });
-                  }
-                });
-              });
-            });
-          });
-        });
-      }
+// New endpoint to send a message
+app.post('/api/send-message', authenticateToken, async (req, res) => {
+  const { recipient_phone, content } = req.body;
+  const sender_phone = req.user.phone;
+
+  try {
+    // Get sender and recipient user IDs
+    const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [sender_phone]);
+    const recipient = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [recipient_phone]);
+
+    if (!sender || !recipient) {
+      return res.status(400).json({ error: 'Invalid sender or recipient' });
+    }
+
+    // Insert the message
+    const query = `
+      INSERT INTO messages (sender_id, recipient_id, content)
+      VALUES (?, ?, ?)
+    `;
+    await dbRunAsync(query, [sender.user_id, recipient.user_id, content]);
+
+    res.json({ message: 'Message sent successfully' });
+  } catch (err) {
+    console.error('Error sending message:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// New endpoint to get messages for a conversation
+app.get('/api/messages/:recipient_phone', authenticateToken, async (req, res) => {
+  const sender_phone = req.user.phone;
+  const { recipient_phone } = req.params;
+
+  try {
+    // Get sender and recipient user IDs
+    const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [sender_phone]);
+    const recipient = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [recipient_phone]);
+
+    if (!sender || !recipient) {
+      return res.status(400).json({ error: 'Invalid sender or recipient' });
+    }
+
+    // Get messages for the conversation
+    const query = `
+      SELECT m.*, 
+             CASE WHEN m.sender_id = ? THEN 'sent' ELSE 'received' END AS message_type
+      FROM messages m
+      WHERE (m.sender_id = ? AND m.recipient_id = ?) OR (m.sender_id = ? AND m.recipient_id = ?)
+      ORDER BY m.timestamp ASC
+    `;
+    const messages = await new Promise((resolve, reject) => {
+      db.all(query, [sender.user_id, sender.user_id, recipient.user_id, recipient.user_id, sender.user_id], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
     });
-  });
+
+    res.json(messages);
+  } catch (err) {
+    console.error('Error retrieving messages:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 
