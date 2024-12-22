@@ -531,6 +531,7 @@ app.post('/api/update-user-details', authenticateToken, async (req, res) => {
 
 
 
+
 app.post('/api/update-vehicle-details', authenticateToken, async (req, res) => {
 
 
@@ -630,65 +631,42 @@ app.post('/api/update-vehicle-details', authenticateToken, async (req, res) => {
 
 
 
-
-// New endpoint to send a message
-app.post('/api/send-message', authenticateToken, async (req, res) => {
-  const { recipient_phone, content } = req.body;
-  const sender_phone = req.user.phone;
-
-  try {
-    // Get sender and recipient user IDs
-    const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [sender_phone]);
-    const recipient = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [recipient_phone]);
-
-    if (!sender || !recipient) {
-      return res.status(400).json({ error: 'Invalid sender or recipient' });
-    }
-
-    // Insert the message
-    const query = `
-      INSERT INTO messages (sender_id, recipient_id, content)
-      VALUES (?, ?, ?)
-    `;
-    await dbRunAsync(query, [sender.user_id, recipient.user_id, content]);
-
-    res.json({ message: 'Message sent successfully' });
-  } catch (err) {
-    console.error('Error sending message:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
+  
 // New endpoint to get messages for a conversation
-app.get('/api/messages/:recipient_phone', authenticateToken, async (req, res) => {
+app.get('/api/messages/:recipient_id', authenticateToken, async (req, res) => {
   const sender_phone = req.user.phone;
-  const { recipient_phone } = req.params;
+  const { recipient_id } = req.params;
 
   try {
-    // Get sender and recipient user IDs
+    // Get sender user ID
     const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [sender_phone]);
-    const recipient = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [recipient_phone]);
 
-    if (!sender || !recipient) {
-      return res.status(400).json({ error: 'Invalid sender or recipient' });
+    if (!sender) {
+      return res.status(400).json({ error: 'Invalid sender' });
     }
 
     // Get messages for the conversation
     const query = `
       SELECT m.*, 
-             CASE WHEN m.sender_id = ? THEN 'sent' ELSE 'received' END AS message_type
+             CASE WHEN m.sender_id = ? THEN 'user' ELSE 'recipient' END AS sender
       FROM messages m
       WHERE (m.sender_id = ? AND m.recipient_id = ?) OR (m.sender_id = ? AND m.recipient_id = ?)
-      ORDER BY m.timestamp ASC
+      ORDER BY m.sent_at ASC
     `;
     const messages = await new Promise((resolve, reject) => {
-      db.all(query, [sender.user_id, sender.user_id, recipient.user_id, recipient.user_id, sender.user_id], (err, rows) => {
+      db.all(query, [sender.user_id, sender.user_id, recipient_id, recipient_id, sender.user_id], (err, rows) => {
         if (err) reject(err);
         else resolve(rows);
       });
     });
 
-    res.json(messages);
+    const fetchedMessages = messages.map(message => ({
+      id: message.id,
+      text: message.content,
+      sender: message.sender
+    }));
+
+    res.json(fetchedMessages);
   } catch (err) {
     console.error('Error retrieving messages:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -697,6 +675,80 @@ app.get('/api/messages/:recipient_phone', authenticateToken, async (req, res) =>
 
 
 
+// Endpoint to handle sending a message by recipient ID
+app.post('/api/send-message-by-id', authenticateToken, async (req, res) => {
+  const { recipient_id, content } = req.body;
+  const sender_phone = req.user.phone;
+
+  try {
+    // Get sender user ID
+    const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [sender_phone]);
+
+    if (!sender) {
+      return res.status(400).json({ error: 'Invalid sender' });
+    }
+
+    // Insert the message
+    const query = `
+      INSERT INTO messages (sender_id, recipient_id, content, sent_at)
+      VALUES (?, ?, ?, datetime('now'))
+    `;
+    await dbRunAsync(query, [sender.user_id, recipient_id, content]);
+
+    res.json({ message: 'Message sent successfully' });
+  } catch (err) {
+    console.error('Error sending message:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
+
+// Endpoint to get the last messages for every user except the current user
+app.get('/api/last-messages', authenticateToken, async (req, res) => {
+  const sender_phone = req.user.phone;
+
+  try {
+    // Get sender user ID
+    const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [sender_phone]);
+
+    if (!sender) {
+      return res.status(400).json({ error: 'Invalid sender' });
+    }
+
+    // Get the last message for each user except the current user
+    const query = `
+      SELECT u.user_id AS id, u.name, m.content AS lastMessage
+      FROM users u
+      JOIN (
+        SELECT recipient_id, MAX(sent_at) AS last_sent_at
+        FROM messages
+        WHERE sender_id = ? OR recipient_id = ?
+        GROUP BY recipient_id
+      ) lm ON u.user_id = lm.recipient_id
+      JOIN messages m ON lm.recipient_id = m.recipient_id AND lm.last_sent_at = m.sent_at
+      WHERE u.user_id != ?
+    `;
+    const lastMessages = await new Promise((resolve, reject) => {
+      db.all(query, [sender.user_id, sender.user_id, sender.user_id], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+
+    const fetchedChats = lastMessages.map(chat => ({
+      id: chat.id,
+      name: chat.name,
+      lastMessage: chat.lastMessage
+    }));
+
+    res.json(fetchedChats);
+  } catch (err) {
+    console.error('Error retrieving last messages:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 // Other endpoints and server setup...
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
