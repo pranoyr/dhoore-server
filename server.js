@@ -24,6 +24,8 @@ const authToken = 'c12c32cfc06d096ac2f26e467fc204b4'; // Replace with your Twili
 const twilioPhoneNumber = '+12517148234'; // Replace with your Twilio phone number
 const client = require('twilio')(accountSid, authToken);
 
+const WebSocket = require('ws');
+
 app.use(bodyParser.json());
 
 // Connect to SQLite database
@@ -37,6 +39,8 @@ const userLocation = {
   latitude: 0,
   longitude: 0
 };
+
+
 
 
 
@@ -61,33 +65,6 @@ const dbRunAsync = (query, params) => {
 };
 
 
-
-// // Endpoint to handle sending a message
-// app.post('/api/send-message', authenticateToken, async (req, res) => {
-//   const { recipient_id, content } = req.body;
-//   const sender_phone = req.user.phone;
-
-//   try {
-//     // Get sender user ID
-//     const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [sender_phone]);
-
-//     if (!sender) {
-//       return res.status(400).json({ error: 'Invalid sender' });
-//     }
-
-//     // Insert the message
-//     const query = `
-//       INSERT INTO messages (sender_id, recipient_id, content, sent_at)
-//       VALUES (?, ?, ?, datetime('now'))
-//     `;
-//     await dbRunAsync(query, [sender.user_id, recipient_id, content]);
-
-//     res.json({ message: 'Message sent successfully' });
-//   } catch (err) {
-//     console.error('Error sending message:', err);
-//     res.status(500).json({ error: 'Internal server error' });
-//   }
-// });
 
 
 // Endpoint to send OTP
@@ -705,6 +682,24 @@ app.post('/api/send-message-by-id', authenticateToken, async (req, res) => {
 
 
 
+// Endpoint to get user ID
+app.get('/api/user-id', authenticateToken, async (req, res) => {
+  const phone_no = req.user.phone;
+
+  try {
+    const user = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [phone_no]);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ id: user.user_id });
+  } catch (err) {
+    console.error('Error querying user ID:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Endpoint to get the last messages for every user except the current user
 app.get('/api/last-messages', authenticateToken, async (req, res) => {
   const sender_phone = req.user.phone;
@@ -750,6 +745,85 @@ app.get('/api/last-messages', authenticateToken, async (req, res) => {
   }
 });
 // Other endpoints and server setup...
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
+});
+
+
+
+const wss = new WebSocket.Server({ server });
+
+
+// Store connected clients
+const clients = new Map();
+
+
+
+wss.on('connection', (ws, req) => {
+
+  
+  ws.on('message', async (message) => {
+    try {
+      const parsedMessage = JSON.parse(message);
+      console.log(parsedMessage)
+      if (parsedMessage.type === 'authenticate') {
+        // Authenticate WebSocket client
+        // const token = parsedMessage.token;
+        // const decoded = jwt.verify(token, SECRET_KEY);
+
+
+        user_id = parsedMessage.user_id
+
+        // // Fetch user_id based on phone number
+        // const user = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [phone_num]);
+        // if (!user) {
+        //   console.error('Invalid user authentication');
+        //   ws.close();
+        //   return;
+        // }
+
+
+        clients.set(user_id, ws);
+        console.log(`WebSocket client authenticated: user_id=${user_id}`);
+      } else if (parsedMessage.type === 'message') {
+        // Handle incoming message
+        const { recipient_id, content, sender_id } = parsedMessage.data;
+
+        // // Save message to database
+        // const query = `
+        //   INSERT INTO messages (sender_id, recipient_id, content, sent_at)
+        //   VALUES (?, ?, ?, datetime('now'))
+        // `;
+        // await dbRunAsync(query, [sender_id, recipient_id, content]);
+
+        console.log('Message sent from', sender_id, 'to', recipient_id, ':', content);
+
+        // Broadcast message to recipient if connected
+        const recipientSocket = clients.get(recipient_id);
+        if (recipientSocket) {
+          recipientSocket.send(
+            JSON.stringify({
+              type: 'message',
+              data: {
+                sender_id,
+                recipient_id,
+                content,
+              },
+            })
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Error handling WebSocket message:', err);
+    }
+  });
+
+  ws.on('close', () => {
+    for (const [user_id, client] of clients.entries()) {
+      if (client === ws) {
+        clients.delete(user_id);
+        console.log(`WebSocket client disconnected: user_id=${user_id}`);
+      }
+    }
+  });
 });
