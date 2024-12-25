@@ -208,7 +208,7 @@ app.get('/api/start-journey/' , authenticateToken, (req, res) => {
 app.get('/api/vehicles', authenticateToken, (req, res) => {
 
 
-  console.log(req.user)
+  // console.log(req.user)
 
 
   const { start, end } = req.query;
@@ -236,7 +236,7 @@ app.get('/api/vehicles', authenticateToken, (req, res) => {
       res.status(500).json({ error: 'Internal server error' });
       return;
     }
-    console.log(rows)
+    // console.log(rows)
     res.json(rows); // Send JSON response with filtered vehicles data
   });
 });
@@ -277,7 +277,7 @@ app.get('/api/userloc', authenticateToken, (req, res) => {
   // add a + to the phone number
  
 
-  console.log(phone_no)
+  // console.log(phone_no)
   // get the location of the user from the db
   const query = `
      SELECT curr_lat, curr_long from users where phone_number like 
@@ -290,12 +290,12 @@ app.get('/api/userloc', authenticateToken, (req, res) => {
       return;
     }
 
-    console.log(rows)
+    // console.log(rows)
 
     userLocation.latitude = rows[0].curr_lat;
     userLocation.longitude = rows[0].curr_long;
 
-    console.log(userLocation)
+    // console.log(userLocation)
     res.json(userLocation); // Send JSON response with filtered vehicles
 
 
@@ -700,33 +700,88 @@ app.get('/api/user-id', authenticateToken, async (req, res) => {
   }
 });
 
-// Endpoint to get the last messages for every user except the current user
+
+// Endpoint to delete a chat by chat ID
+app.get('/api/delete-chat/:chatId', authenticateToken, async (req, res) => {
+  const { chatId } = req.params;
+
+  const phone_no = req.user.phone;
+  // Fetch user ID based on phone number
+  const user = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [phone_no]);
+
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const user_id = user.user_id;
+
+  try {
+    // Delete messages associated with the chat
+    const deleteMessagesQuery = `
+      DELETE FROM messages
+      WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
+    `;
+    await dbRunAsync(deleteMessagesQuery, [user_id, chatId, chatId, user_id]);
+
+    res.json({ message: `Chat with ID ${chatId} deleted.` });
+  } catch (err) {
+    console.error(`Error deleting chat with ID ${chatId}:`, err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
 app.get('/api/last-messages', authenticateToken, async (req, res) => {
   const sender_phone = req.user.phone;
 
   try {
     // Get sender user ID
     const sender = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [sender_phone]);
-
+    
     if (!sender) {
       return res.status(400).json({ error: 'Invalid sender' });
     }
 
-    // Get the last message for each user except the current user
+    // Modified query to correctly get the last message between each pair of users
     const query = `
-      SELECT u.user_id AS id, u.name, m.content AS lastMessage
-      FROM users u
-      JOIN (
-        SELECT recipient_id, MAX(sent_at) AS last_sent_at
-        FROM messages
+      WITH LastMessages AS (
+        SELECT 
+          CASE 
+            WHEN sender_id = ? THEN recipient_id 
+            ELSE sender_id 
+          END AS other_user_id,
+          content,
+          sent_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY 
+              CASE 
+                WHEN sender_id = ? THEN recipient_id 
+                ELSE sender_id 
+              END 
+            ORDER BY sent_at DESC
+          ) as rn
+        FROM messages 
         WHERE sender_id = ? OR recipient_id = ?
-        GROUP BY recipient_id
-      ) lm ON u.user_id = lm.recipient_id
-      JOIN messages m ON lm.recipient_id = m.recipient_id AND lm.last_sent_at = m.sent_at
-      WHERE u.user_id != ?
+      )
+      SELECT 
+        u.user_id AS id,
+        u.name,
+        lm.content AS lastMessage,
+        lm.sent_at
+      FROM LastMessages lm
+      JOIN users u ON u.user_id = lm.other_user_id
+      WHERE rn = 1
+      ORDER BY lm.sent_at DESC
     `;
+
     const lastMessages = await new Promise((resolve, reject) => {
-      db.all(query, [sender.user_id, sender.user_id, sender.user_id], (err, rows) => {
+      db.all(query, [
+        sender.user_id, 
+        sender.user_id, 
+        sender.user_id, 
+        sender.user_id
+      ], (err, rows) => {
         if (err) reject(err);
         else resolve(rows);
       });
@@ -735,7 +790,8 @@ app.get('/api/last-messages', authenticateToken, async (req, res) => {
     const fetchedChats = lastMessages.map(chat => ({
       id: chat.id,
       name: chat.name,
-      lastMessage: chat.lastMessage
+      lastMessage: chat.lastMessage,
+      timestamp: chat.sent_at
     }));
 
     res.json(fetchedChats);
@@ -744,6 +800,8 @@ app.get('/api/last-messages', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+
 // Other endpoints and server setup...
 const server = app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
@@ -767,20 +825,8 @@ wss.on('connection', (ws, req) => {
       const parsedMessage = JSON.parse(message);
       console.log(parsedMessage)
       if (parsedMessage.type === 'authenticate') {
-        // Authenticate WebSocket client
-        // const token = parsedMessage.token;
-        // const decoded = jwt.verify(token, SECRET_KEY);
-
-
+      
         user_id = parsedMessage.user_id
-
-        // // Fetch user_id based on phone number
-        // const user = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [phone_num]);
-        // if (!user) {
-        //   console.error('Invalid user authentication');
-        //   ws.close();
-        //   return;
-        // }
 
 
         clients.set(user_id, ws);
@@ -789,14 +835,9 @@ wss.on('connection', (ws, req) => {
         // Handle incoming message
         const { recipient_id, content, sender_id } = parsedMessage.data;
 
-        // // Save message to database
-        // const query = `
-        //   INSERT INTO messages (sender_id, recipient_id, content, sent_at)
-        //   VALUES (?, ?, ?, datetime('now'))
-        // `;
-        // await dbRunAsync(query, [sender_id, recipient_id, content]);
-
+      
         console.log('Message sent from', sender_id, 'to', recipient_id, ':', content);
+
 
         // Broadcast message to recipient if connected
         const recipientSocket = clients.get(recipient_id);
