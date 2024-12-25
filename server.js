@@ -303,6 +303,42 @@ app.get('/api/userloc', authenticateToken, (req, res) => {
 });
 
 
+// Endpoint to get user ID by phone number
+app.get('/api/get_id', authenticateToken, async (req, res) => {
+  const phone_no = req.user.phone;
+
+  try {
+    const user = await dbGetAsync('SELECT user_id FROM users WHERE phone_number = ?', [phone_no]);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ id: user.user_id });
+  } catch (err) {
+    console.error('Error querying user ID:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Endpoint to check if user exists
+app.post('/api/check-user', async (req, res) => {
+  const { phone } = req.body;
+
+  try {
+    const user = await dbGetAsync('SELECT * FROM users WHERE phone_number = ?', [phone]);
+
+    if (user) {
+      res.json({ isNewUser: false, userId: user.user_id , name: user.name });
+    } else {
+      res.json({ isNewUser: true });
+    }
+  } catch (err) {
+    console.error('Error checking user:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 
 app.post('/api/save-details', authenticateToken, async (req, res) => {
   try {
