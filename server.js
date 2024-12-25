@@ -29,7 +29,7 @@ const WebSocket = require('ws');
 app.use(bodyParser.json());
 
 // Connect to SQLite database
-const db = new sqlite3.Database('/Users/pranoy/code/dhoore-server/dhoore.db'); // Replace with your SQLite database file path
+const db = new sqlite3.Database('./dhoore.db'); // Replace with your SQLite database file path
 
 // Store OTPs temporarily
 const otps = {};
