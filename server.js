@@ -12,7 +12,7 @@ const bodyParser = require('body-parser');
 const twilio = require('twilio');
 
 const app = express();
-const port = 3000;
+const port = 443;
 const SECRET_KEY = 'your_secret_key'; // Replace with your actual secret key
 const REFRESH_TOKEN_SECRET = 'your_refresh_token_secret'; // A different secret for refresh tokens
 const REFRESH_TOKEN_EXPIRY = '7d'; // Example: 7 days
