@@ -839,10 +839,9 @@ app.get('/api/last-messages', authenticateToken, async (req, res) => {
 
 
 // Other endpoints and server setup...
-const server = app.listen(port, () => {
+const server = app.listen(port, '0.0.0.0', () => {
   console.log(`Server is running on http://localhost:${port}`);
 });
-
 
 
 const wss = new WebSocket.Server({ server });
