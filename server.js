@@ -12,13 +12,7 @@ const bodyParser = require('body-parser');
 const twilio = require('twilio');
 
 const app = express();
-const parser = new argparse.ArgumentParser({
-  description: 'Dhoore Server'
-});
-
-parser.add_argument('-p', '--port', { help: 'Port to run the server on', default: 3000 });
-const args = parser.parse_args();
-const port = args.port;
+const port = process.argv[2] || 3000;
 const SECRET_KEY = 'your_secret_key'; // Replace with your actual secret key
 const REFRESH_TOKEN_SECRET = 'your_refresh_token_secret'; // A different secret for refresh tokens
 const REFRESH_TOKEN_EXPIRY = '7d'; // Example: 7 days
@@ -31,7 +25,6 @@ const twilioPhoneNumber = '+12517148234'; // Replace with your Twilio phone numb
 const client = require('twilio')(accountSid, authToken);
 
 const WebSocket = require('ws');
-const argparse = require('argparse');
 
 app.use(bodyParser.json());
 
