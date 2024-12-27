@@ -12,7 +12,7 @@ const bodyParser = require('body-parser');
 const twilio = require('twilio');
 
 const app = express();
-const port = process.argv[2] || 3000;
+const port = 3000;
 const SECRET_KEY = 'your_secret_key'; // Replace with your actual secret key
 const REFRESH_TOKEN_SECRET = 'your_refresh_token_secret'; // A different secret for refresh tokens
 const REFRESH_TOKEN_EXPIRY = '7d'; // Example: 7 days
@@ -71,7 +71,7 @@ const dbRunAsync = (query, params) => {
 app.post('/api/send-otp', (req, res) => {
   const { phone } = req.body;
   const formattedPhone = `+${phone}`;
-  const otp = Math.floor(100000 + Math.random() * 900000).toString(); // Generate a random 6-digit OTP
+  const otp = Math.floor(1000 + Math.random() * 9000).toString(); // Generate a random 4-digit OTP
 
   // Store OTP
   otps[phone] = otp;
