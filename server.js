@@ -78,7 +78,9 @@ app.post('/api/send-otp', (req, res) => {
 
   console.log(otp)
   res.json({ message: 'OTP sent' });
-
+  // Generate 6 random numbers
+  const randomNumbers = Array.from({ length: 6 }, () => Math.floor(Math.random() * 100));
+  console.log('Generated OTP:', randomNumbers);
   // Send OTP via Twilio
   // client.messages
   //   .create({
