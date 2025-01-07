@@ -1,3 +1,4 @@
+
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const jwt = require('jsonwebtoken');
@@ -56,6 +57,17 @@ const dbRunAsync = (query, params) => {
     });
   });
 };
+
+// Utility function to promisify db.all
+const dbAllAsync = (query, params) => {
+  return new Promise((resolve, reject) => {
+    db.all(query, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+};
+
 
 
 
@@ -146,102 +158,84 @@ app.post('/api/refresh-token', (req, res) => {
 
 
 
-app.get('/api/stop-journey/' , authenticateToken, (req, res) => 
-  {
-    const phone_no = req.user.phone;
-    const { status } = req.query;
+app.get('/api/stop-journey/', authenticateToken, async (req, res) => {
+  const phone_no = req.user.phone;
+  const { status } = req.query;
+  const destination = null;
 
-    const destination = null;
-
-    // update the status of the user to running and set the destination
-    const query = `
-      UPDATE running_vehicles
-      SET status = ?, destination = ?
-      WHERE user_id = (SELECT user_id FROM users WHERE phone_number = ?)`
-
-  db.run(query, [status, destination, phone_no], function(err) {
-    if (err) {
-      console.error('Error updating user location:', err);
-      res.status(500).json({ error: 'Internal server error' });
-      return;
-    }
-
-    res.json({ message: 'Journey stopped' });
-   });
-
-  });
-  
-
-
-
-
-app.get('/api/start-journey/' , authenticateToken, (req, res) => {
-  {
-    const phone_no = req.user.phone;
-    const { status, destination } = req.query;
-
-
-    // update the status of the user to running and set the destination
-    const query = `
-      UPDATE running_vehicles
-      SET status = ?, destination = ?
-      WHERE user_id = (SELECT user_id FROM users WHERE phone_number = ?)`
-   
-
-  db.run(query, [status, destination, phone_no], function(err) {
-    if (err) {
-      console.error('Error updating user location:', err);
-      res.status(500).json({ error: 'Internal server error' });
-      return;
-    }
-
-    res.json({ message: 'Journey started' });
-   });
-  }});
-
-
-
-// Define a route to fetch vehicles filtered by start and end locations
-app.get('/api/vehicles', authenticateToken, (req, res) => {
-
-
-  // console.log(req.user)
-
-
-  const { start, end } = req.query;
-  
-  if (!start || !end) {
-    return res.status(400).json({ error: 'Start and end locations are required' });
-  }
-
-
-  //   excpet the phone number user
+  // update the status of the user to running and set the destination
   const query = `
-    SELECT rv.*, u.*, v.*
-    FROM running_vehicles AS rv
-    JOIN users AS u ON rv.user_id = u.user_id
-    JOIN vehicles AS v ON rv.vehicle_id = v.vehicle_id
-    WHERE rv.destination = ? and u.phone_number != ?
-
-
+    UPDATE running_vehicles
+    SET status = ?, destination = ?
+    WHERE user_id = (SELECT user_id FROM users WHERE phone_number = ?)
   `;
-  
 
-  db.all(query, [end, req.user.phone], (err, rows) => {
-    if (err) {
-      console.error('Error querying vehicles table:', err);
-      res.status(500).json({ error: 'Internal server error' });
-      return;
-    }
-    // console.log(rows)
-    res.json(rows); // Send JSON response with filtered vehicles data
-  });
+  try {
+    await dbRunAsync(query, [status, destination, phone_no]);
+    res.json({ message: 'Journey stopped' });
+  } catch (err) {
+    console.error('Error updating user location:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 
 
+
+app.get('/api/start-journey/', authenticateToken, async (req, res) => {
+  const phone_no = req.user.phone;
+  const { status, destination } = req.query;
+
+  // update the status of the user to running and set the destination
+  const query = `
+    UPDATE running_vehicles
+    SET status = ?, destination = ?
+    WHERE user_id = (SELECT user_id FROM users WHERE phone_number = ?)
+  `;
+
+  try {
+    await dbRunAsync(query, [status, destination, phone_no]);
+    res.json({ message: 'Journey started' });
+  } catch (err) {
+    console.error('Error updating user location:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+  app.get('/api/vehicles', authenticateToken, async (req, res) => {
+    try {
+      const { start, end } = req.query;
+  
+      if (!start || !end) {
+        return res.status(400).json({ error: 'Start and end locations are required' });
+      }
+  
+      const query = `
+        SELECT rv.*, u.*, v.*
+        FROM running_vehicles AS rv
+        JOIN users AS u ON rv.user_id = u.user_id
+        JOIN vehicles AS v ON rv.vehicle_id = v.vehicle_id
+        WHERE rv.destination = ? AND u.phone_number != ?
+      `;
+  
+      // Wait for the query result using dbAllAsync
+      const rows = await dbAllAsync(query, [end, req.user.phone]);
+
+      // Send the response after the query completes
+      res.json(rows);
+    } catch (err) {
+      console.error('Error querying vehicles table:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+
+
+
+
 // Endpoint to update user location
-app.post('/api/updateloc', authenticateToken, (req, res) => {
+app.post('/api/updateloc', authenticateToken, async (req, res) => {
   const { lat, long } = req.body;
   const phone_no = req.user.phone;
 
@@ -251,15 +245,13 @@ app.post('/api/updateloc', authenticateToken, (req, res) => {
     WHERE phone_number = ?
   `;
 
-  db.run(query, [lat, long, phone_no], function(err) {
-    if (err) {
-      console.error('Error updating user location:', err);
-      res.status(500).json({ error: 'Internal server error' });
-      return;
-    }
-
+  try {
+    await dbRunAsync(query, [lat, long, phone_no]);
     res.json({ message: 'Location updated successfully' });
-  });
+  } catch (err) {
+    console.error('Error updating user location:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 
@@ -279,25 +271,21 @@ app.get('/api/userloc', authenticateToken, (req, res) => {
   const query = `
      SELECT curr_lat, curr_long from users where phone_number like 
   ` + "'%" + phone_no + "%'";
-
-  db.all(query, (err, rows) => {
-    if (err) {
-      console.error('Error querying vehicles table:', err);
+  dbAllAsync(query)
+    .then(rows => {
+      if (rows.length > 0) {
+        userLocation.latitude = rows[0].curr_lat;
+        userLocation.longitude = rows[0].curr_long;
+        res.json(userLocation); // Send JSON response with user location
+      } else {
+        res.status(404).json({ error: 'User location not found' });
+      }
+    })
+    .catch(err => {
+      console.error('Error querying user location:', err);
       res.status(500).json({ error: 'Internal server error' });
-      return;
-    }
-
-    // console.log(rows)
-
-    userLocation.latitude = rows[0].curr_lat;
-    userLocation.longitude = rows[0].curr_long;
-
-    // console.log(userLocation)
-    res.json(userLocation); // Send JSON response with filtered vehicles
-
-
+    });
   });
-});
 
 
 // Endpoint to get user ID by phone number
@@ -850,40 +838,51 @@ const clients = new Map();
 
 
 wss.on('connection', (ws, req) => {
-
-  
   ws.on('message', async (message) => {
     try {
       const parsedMessage = JSON.parse(message);
-      console.log(parsedMessage)
+      console.log('Received message:', parsedMessage);
+
       if (parsedMessage.type === 'authenticate') {
-      
-        user_id = parsedMessage.user_id
-
-
+        const user_id = parsedMessage.user_id;
         clients.set(user_id, ws);
         console.log(`WebSocket client authenticated: user_id=${user_id}`);
-      } else if (parsedMessage.type === 'message') {
-        // Handle incoming message
+      } 
+
+      else if (parsedMessage.type === 'message') {
+        // Handle direct message
         const { recipient_id, content, sender_id } = parsedMessage.data;
 
-      
         console.log('Message sent from', sender_id, 'to', recipient_id, ':', content);
 
-
-        // Broadcast message to recipient if connected
+        // Send message to recipient if connected
         const recipientSocket = clients.get(recipient_id);
         if (recipientSocket) {
           recipientSocket.send(
             JSON.stringify({
               type: 'message',
-              data: {
-                sender_id,
-                recipient_id,
-                content,
-              },
+              data: { sender_id, recipient_id, content },
             })
           );
+        }
+      } 
+
+      else if (parsedMessage.type === 'search_broadcast') {
+        // Handle broadcast of place information
+        const { place } = parsedMessage.data;
+
+        console.log('Broadcasting place:', place);
+
+        // Broadcast the place to all connected clients
+        for (const client of clients.values()) {
+          if (client !== ws) { // Optionally exclude the sender
+            client.send(
+              JSON.stringify({
+                type: 'search_broadcast',
+                data: { place },
+              })
+            );
+          }
         }
       }
     } catch (err) {
