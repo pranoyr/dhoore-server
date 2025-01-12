@@ -450,20 +450,23 @@ app.post('/api/save-details', authenticateToken, async (req, res) => {
 app.get('/api/user-details', authenticateToken, async (req, res) => {
   const phone_no = req.user.phone;
 
-  const query = `
-    SELECT * FROM users WHERE phone_number = ?
-  `;
-
   try {
-    const user = await dbGetAsync(query, [phone_no]);
+    const userQuery = `
+      SELECT u.*, rv.status AS vehicle_status, v.*
+      FROM users u
+      LEFT JOIN running_vehicles rv ON u.user_id = rv.user_id
+      LEFT JOIN vehicles v ON rv.vehicle_id = v.vehicle_id
+      WHERE u.phone_number = ?
+    `;
+    const userDetails = await dbGetAsync(userQuery, [phone_no]);
 
-    if (!user) {
+    if (!userDetails) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json(user);
+    res.json(userDetails);
   } catch (err) {
-    console.error('Error querying user:', err);
+    console.error('Error querying user details:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -869,7 +872,8 @@ wss.on('connection', (ws, req) => {
 
       else if (parsedMessage.type === 'search_broadcast') {
         // Handle broadcast of place information
-        const { place } = parsedMessage.data;
+        const { vehicleInfo, place, stopSearch } = parsedMessage.data;
+
 
         console.log('Broadcasting place:', place);
 
@@ -879,7 +883,7 @@ wss.on('connection', (ws, req) => {
             client.send(
               JSON.stringify({
                 type: 'search_broadcast',
-                data: { place },
+                data: { vehicleInfo, place, stopSearch },
               })
             );
           }
