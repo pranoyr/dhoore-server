@@ -841,10 +841,17 @@ const clients = new Map();
 
 
 wss.on('connection', (ws, req) => {
+  ws.isAlive = true; // Mark connection as alive
   ws.on('message', async (message) => {
     try {
       const parsedMessage = JSON.parse(message);
       console.log('Received message:', parsedMessage);
+
+      if (parsedMessage.type === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong' }));
+        ws.isAlive = true; // Mark connection as alive on ping
+        return;
+      }
 
       if (parsedMessage.type === 'authenticate') {
         const user_id = parsedMessage.user_id;
@@ -903,3 +910,17 @@ wss.on('connection', (ws, req) => {
     }
   });
 });
+
+
+// Heartbeat check for dead connections
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (!ws.isAlive) {
+      console.log('Terminating dead connection');
+      return ws.terminate();
+    }
+
+    ws.isAlive = false;
+    ws.ping(); // Send a ping to the client
+  });
+}, 30000); // Check every 30 seconds
