@@ -181,20 +181,46 @@ app.get('/api/stop-journey/', authenticateToken, async (req, res) => {
 
 
 
+// Endpoint to get the last known search place
+app.get('/api/last-search', authenticateToken, async (req, res) => {
+  const phone_no = req.user.phone;
+
+  try {
+    const query = `
+      SELECT destination as place, dest_lat AS lat, dest_long AS lng
+      FROM running_vehicles
+      WHERE user_id = (SELECT user_id FROM users WHERE phone_number = ?)
+    `;
+
+    const response = await dbGetAsync(query, [phone_no]);
+
+    if (!response) {
+      return res.status(404).json({ error: 'Last search place not found' });
+    }
+
+    const { place, lat, lng } = response;
+    res.json({ place, lat, lng });
+  } catch (err) {
+    console.error('Error querying last search place:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
 
 app.get('/api/start-journey/', authenticateToken, async (req, res) => {
   const phone_no = req.user.phone;
-  const { status, destination } = req.query;
+  const { status, destination, dest_lat, dest_long } = req.query;
 
   // update the status of the user to running and set the destination
   const query = `
     UPDATE running_vehicles
-    SET status = ?, destination = ?
+    SET status = ?, destination = ?, dest_lat = ?, dest_long = ?
     WHERE user_id = (SELECT user_id FROM users WHERE phone_number = ?)
   `;
 
   try {
-    await dbRunAsync(query, [status, destination, phone_no]);
+    await dbRunAsync(query, [status, destination, dest_lat, dest_long, phone_no]);
     res.json({ message: 'Journey started' });
   } catch (err) {
     console.error('Error updating user location:', err);
